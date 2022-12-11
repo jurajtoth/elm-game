@@ -20,7 +20,6 @@ main = Browser.element
     , subscriptions = subscriptions
     }
 
-
 type alias Model =
   { hero : Character
   , tickNum : Int
@@ -28,12 +27,14 @@ type alias Model =
   , lastKeyPress : String
   , gameConfig : GameConfig
   , gameStats : GameStats
+  , flyingBullets : List FlyingBullet
   }
 
 type alias GameConfig =
   { tickSpeed : Int
   , gameSizeX : Int
   , gameSizeY : Int
+  , heroSize : Int
   }
 
 type alias GameStats =
@@ -41,15 +42,17 @@ type alias GameStats =
   , health : Int
   }
 
-type alias Position =
+type alias FlyingBullet =
   { x : Int
   , y : Int
+  , orientation : Orientation
   }
 
 type Orientation = Up | Down | Left | Right
 
 type alias Character = 
-  { position : Position
+  { x : Int
+  , y : Int
   , orientation : Orientation
   }
 
@@ -65,16 +68,16 @@ type alias MoveDirections =
 -- INIT
 init : () -> (Model, Cmd Msg)
 init _ = 
-  ({ hero = Character (Position 10 10) Right
+  ({ hero = Character 100 100 Right
   , tickNum = 0
   , currentTime = "N/A"
   , lastKeyPress = "N/A"
-  , gameConfig = GameConfig 100 1200 600
+  , gameConfig = GameConfig 10 1200 600 20
   , gameStats = GameStats 0 10
+  , flyingBullets = []
   }, Cmd.none)
 
 type Msg 
-  --= MoveHero MoveDirection
   = GameTick Time.Posix
   | ClockTick Time.Posix
   | CharacterKey Char
@@ -90,22 +93,13 @@ directions =
   }
 
 -- POSITIONS AND MOVEMENT
-positionString: Position -> String
-positionString position =
+positionString: Int -> Int -> String
+positionString x y =
   " ["
-  ++String.fromInt position.x
+  ++String.fromInt x
   ++","
-  ++String.fromInt position.y
+  ++String.fromInt y
   ++"]"
-
-changePosition: Position -> MoveDirection -> Position
-changePosition position moveDirection =
-  { position 
-  | x = position.x + withDefault 0 (Array.get 0 moveDirection)
-  , y = position.y + withDefault 0 (Array.get 1 moveDirection)
-  }
-
--- SCOREBOARD
 
 appendZeroIfLengthOne: String -> String
 appendZeroIfLengthOne str = 
@@ -130,20 +124,50 @@ timeToString time =
   |> String.fromInt
   |> appendZeroIfLengthOne)
 
-moveCharacter: Character -> MoveDirection -> Orientation -> Character
-moveCharacter hero moveDirection orientation =
-  { hero 
-  | position = changePosition hero.position moveDirection
-  , orientation = orientation
-  }
+moveCharacter: Character -> MoveDirection -> Orientation -> Model -> Character
+moveCharacter hero moveDirection orientation model =
+  let
+    newX = hero.x + withDefault 0 (Array.get 0 moveDirection)
+    newY = hero.y + withDefault 0 (Array.get 1 moveDirection)
+    fixedX = if newX < 0 then 0 else if newX > model.gameConfig.gameSizeX then model.gameConfig.gameSizeX else newX
+    fixedY = if newY < 0 then 0 else if newY > model.gameConfig.gameSizeY then model.gameConfig.gameSizeY else newY
+  in
+    { hero 
+    | x = fixedX
+    , y = fixedY
+    , orientation = orientation
+    }
+
+moveBullet: FlyingBullet -> FlyingBullet
+moveBullet flyingBullet =
+  case flyingBullet.orientation of
+      Up ->
+        {flyingBullet|y=flyingBullet.y-10}
+      Down ->
+        {flyingBullet|y=flyingBullet.y+10}
+      Left ->
+        {flyingBullet|x=flyingBullet.x-10}
+      Right ->
+        {flyingBullet|x=flyingBullet.x+10}
 
 update: Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
-    --MoveHero direction ->
-    --  ({ model | hero = moveCharacter model.hero direction }, Cmd.none)
     GameTick time ->
-      ({ model | tickNum = model.tickNum + 1 }, Cmd.none)
+      ({ model
+      | tickNum = model.tickNum + 1
+      , flyingBullets = List.filter
+        (\a -> -- filter bullets that are out of area
+          (a.x < model.gameConfig.gameSizeX)
+          &&
+          (a.x > 0)
+          &&
+          (a.y < model.gameConfig.gameSizeY)
+          &&
+          (a.y > 0)
+        )
+        (List.map moveBullet model.flyingBullets)
+      }, Cmd.none)
     ClockTick time ->
       ({ model | currentTime = timeToString time}, Cmd.none)
     CharacterKey char ->
@@ -152,16 +176,23 @@ update msg model =
         bulletShotStats = { oldGameStats | bulletsShot = oldGameStats.bulletsShot + 1 }
       in
         case char of
-          'w' -> ({ model | hero = moveCharacter model.hero directions.up Up}, Cmd.none)
-          'a' -> ({ model | hero = moveCharacter model.hero directions.left Left}, Cmd.none)
-          's' -> ({ model | hero = moveCharacter model.hero directions.down Down}, Cmd.none)
-          'd' -> ({ model | hero = moveCharacter model.hero directions.right Right}, Cmd.none)
-          ' ' -> ({ model | gameStats = bulletShotStats}, Cmd.none)
-          _ -> (model, Cmd.none)
+          'w' ->
+            ({ model | hero = moveCharacter model.hero directions.up Up model}, Cmd.none)
+          'a' ->
+            ({ model | hero = moveCharacter model.hero directions.left Left model}, Cmd.none)
+          's' ->
+            ({ model | hero = moveCharacter model.hero directions.down Down model}, Cmd.none)
+          'd' ->
+            ({ model | hero = moveCharacter model.hero directions.right Right model}, Cmd.none)
+          ' ' -> 
+            ({ model 
+            | gameStats = bulletShotStats
+            , flyingBullets = List.append model.flyingBullets [(FlyingBullet model.hero.x model.hero.y model.hero.orientation)]
+            }, Cmd.none)
+          _ -> 
+            (model, Cmd.none)
     ControlKey keyValue ->
       ({ model | lastKeyPress = keyValue}, Cmd.none)
-
-
 
 -- SUBSCRIPTIONS
 subscriptions : Model -> Sub Msg
@@ -191,19 +222,100 @@ svgEnemy xCoord yCoord size =
     , y (String.fromInt yCoord)
     , width (String.fromInt size)
     , height (String.fromInt size)
+    , Html.Attributes.style "fill" "yellow"
     ]
     []
 
-svgHero : Int -> Int -> Int -> Svg msg
-svgHero xCoord yCoord size =
-   Svg.rect
-    [ x (String.fromInt xCoord) 
-    , y (String.fromInt yCoord)
-    , width (String.fromInt size)
-    , height (String.fromInt size)
-    , Html.Attributes.style "fill" "red"
-    ]
-    []
+svgHero : Int -> Int -> Int -> Orientation -> Svg msg
+svgHero xCoord yCoord size orientation =
+  Svg.svg []
+  [
+    -- HEAD
+    Svg.circle
+      [ cx (String.fromInt xCoord) 
+      , cy (String.fromInt yCoord)
+      , r (String.fromInt size)
+      , Html.Attributes.style "fill" "red"
+      ][],
+    -- LEFT EYE
+    Svg.circle
+      [ cx (String.fromInt (xCoord-size//3)) 
+      , cy (String.fromInt (yCoord-size//3))
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "black"
+      ][],
+    -- RIGHT EYE
+    Svg.circle
+      [ cx (String.fromInt (xCoord+size//3)) 
+      , cy (String.fromInt (yCoord-size//3))
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "black"
+      ][],
+    -- NOSE
+    Svg.circle
+      [ cx (String.fromInt (xCoord)) 
+      , cy (String.fromInt (yCoord))
+      , r (String.fromInt (size//10))
+      , Html.Attributes.style "fill" "black"
+      ][],
+    -- MOUTH
+    Svg.rect
+      [ x (String.fromInt (xCoord-size//2)) 
+      , y (String.fromInt (yCoord+size//2))
+      , width (String.fromInt (size))
+      , height (String.fromInt (size//10))
+      ][],
+    svgGun xCoord yCoord size orientation
+  ]
+
+svgGun : Int -> Int -> Int -> Orientation -> Svg msg
+svgGun xCoord yCoord size orientation =
+  case orientation of
+    Up ->
+      Svg.circle
+      [ cx (String.fromInt xCoord)
+      , cy (String.fromInt (yCoord-size))
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "blue"
+      ][]
+    Down ->
+      Svg.circle
+      [ cx (String.fromInt xCoord)
+      , cy (String.fromInt (yCoord+size))
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "blue"
+      ][]
+    Left ->
+      Svg.circle
+      [ cx (String.fromInt (xCoord-size)) 
+      , cy (String.fromInt yCoord)
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "blue"
+      ][]
+    Right ->
+      Svg.circle
+      [ cx (String.fromInt (xCoord+size)) 
+      , cy (String.fromInt yCoord)
+      , r (String.fromInt (size//5))
+      , Html.Attributes.style "fill" "blue"
+      ][]
+
+svgBullets : List FlyingBullet -> Svg msg
+svgBullets flyingBullets =
+  Svg.svg 
+  [] 
+  (List.map
+    (\a -> 
+      Svg.circle
+      [ cx (String.fromInt (a.x)) 
+      , cy (String.fromInt (a.y))
+      , r (String.fromInt (2))
+      , Html.Attributes.style "fill" "red"
+      ]
+      []
+    ) flyingBullets
+  )
+  
 
 view : Model -> Html Msg
 view model =
@@ -216,14 +328,14 @@ view model =
       , Html.Attributes.style "width" "100%"
       , Html.Attributes.style "text-align" "center"
       ]
-      [ h2 [] [ Html.text "Monsters of Elm street" ]
+      [ h2 [] [Html.text "Monsters of Elm street"]
       ],
     div 
       [ id "info"
       , Html.Attributes.style "background-color" "black"
       , Html.Attributes.style "color" "white"
       , Html.Attributes.style "float" "left"
-      , Html.Attributes.style "width" "10%"
+      , Html.Attributes.style "width" "15%"
       , Html.Attributes.style "border" "5px solid"
       , Html.Attributes.style "margin-left" "10px"
 
@@ -231,11 +343,11 @@ view model =
       [ 
         div[][Html.text ("GAME INFO")]
       , div[][Html.text ("Bullets shot: "++String.fromInt model.gameStats.bulletsShot)]
+      , div[][Html.text ("Flying bullets: "++String.fromInt (List.length model.flyingBullets))]
       , br[][]
       , br[][]
       , div[][Html.text ("DEBUG INFO")]
-      , br[][]
-      , div[][Html.text ("Hero position: "++positionString model.hero.position)]
+      , div[][Html.text ("Hero position: "++positionString model.hero.x model.hero.y)]
       , div[][Html.text ("Tick count: "++String.fromInt model.tickNum)]
       , div[][Html.text ("UTC time: "++ model.currentTime)]
       , div[][Html.text ("Last key: "++ model.lastKeyPress)]
@@ -251,18 +363,15 @@ view model =
         [ width (String.fromInt model.gameConfig.gameSizeX)
         , height (String.fromInt model.gameConfig.gameSizeY)
         , viewBox ("0 0 "++(String.fromInt model.gameConfig.gameSizeX)++" "++(String.fromInt model.gameConfig.gameSizeY))
-        , Html.Attributes.style  "border" "10px solid"
-        , Html.Attributes.style  "display" "block"
-        , Html.Attributes.style  "margin" "auto"
+        , Html.Attributes.style "border" "10px solid"
+        , Html.Attributes.style "display" "block"
+        , Html.Attributes.style "margin" "auto"
         ]
-        [ svgEnemy 100 100 50,
-          svgEnemy 200 200 100,
-          svgHero model.hero.position.x model.hero.position.y 50
+        [ 
+        --  svgEnemy 100 100 50
+        --, svgEnemy 200 200 100
+          svgHero model.hero.x model.hero.y model.gameConfig.heroSize model.hero.orientation
+        , svgBullets model.flyingBullets
         ]
       ]
     ]
-
-    --, button [ onClick (MoveHero directions.up Up) ] [ text "^" ]
-    --, button [ onClick (MoveHero directions.down Down) ] [ text "v" ]
-    --, button [ onClick (MoveHero directions.left Left) ] [ text "<" ]
-    --, button [ onClick (MoveHero directions.right Right) ] [ text ">" ]
